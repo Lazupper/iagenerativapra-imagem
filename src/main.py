@@ -27,7 +27,7 @@ class Preset(str, Enum):
     brand = "brand"
 
 
-app = FastAPI(title="IA Generativa para Imagens", version="1.0.0")
+app = FastAPI(title="IA Generativa para Imagens", version="1.1.0")
 
 
 def _read_upload_to_pil(image_file: UploadFile) -> Image.Image:
@@ -99,28 +99,7 @@ def _inpaint(np_img: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return cv2.inpaint(np_img, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
 
-def _call_removebg(image_bytes: bytes) -> bytes:
-    key = os.getenv("REMOVEBG_API_KEY")
-    if not key:
-        raise HTTPException(status_code=400, detail="REMOVEBG_API_KEY não configurada.")
-
-    response = requests.post(
-        "https://api.remove.bg/v1.0/removebg",
-        files={"image_file": ("image.jpg", image_bytes)},
-        data={"size": "auto"},
-        headers={"X-Api-Key": key},
-        timeout=60,
-    )
-
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Erro remove.bg: {response.text}")
-
-    return response.content
-
-
-def _commercial_pipeline(image: Image.Image, provider: Provider, preset: Preset, remove_imperfections: bool) -> Image.Image:
-    # Estrutura preparada para chamadas reais de OpenAI/Replicate/Stability.
-    # Para confiabilidade offline, aplica pipeline local caso APIs não estejam configuradas.
+def _resolve_provider(provider: Provider) -> tuple[Provider, str]:
     configured = {
         Provider.openai: bool(os.getenv("OPENAI_API_KEY")),
         Provider.replicate: bool(os.getenv("REPLICATE_API_TOKEN")),
@@ -128,20 +107,55 @@ def _commercial_pipeline(image: Image.Image, provider: Provider, preset: Preset,
         Provider.local: True,
     }
 
-    if not configured.get(provider, False):
-        provider = Provider.local
+    if configured.get(provider, False):
+        return provider, "requested"
 
+    return Provider.local, f"fallback_no_credentials_for_{provider.value}"
+
+
+def _call_removebg(image_bytes: bytes) -> bytes:
+    key = os.getenv("REMOVEBG_API_KEY")
+    if not key:
+        raise HTTPException(status_code=400, detail="REMOVEBG_API_KEY não configurada.")
+
+    try:
+        response = requests.post(
+            "https://api.remove.bg/v1.0/removebg",
+            files={"image_file": ("image.jpg", image_bytes)},
+            data={"size": "auto"},
+            headers={"X-Api-Key": key},
+            timeout=60,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Falha de conexão remove.bg: {exc}") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Erro remove.bg: {response.text}")
+
+    return response.content
+
+
+def _commercial_pipeline(image: Image.Image, preset: Preset, remove_imperfections: bool) -> Image.Image:
     output = image
     if remove_imperfections:
         output = _remove_imperfections(output)
     output = _apply_preset(output, preset)
-
     return output
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/providers/status")
+def providers_status() -> dict[str, bool]:
+    return {
+        "openai": bool(os.getenv("OPENAI_API_KEY")),
+        "replicate": bool(os.getenv("REPLICATE_API_TOKEN")),
+        "stability": bool(os.getenv("STABILITY_API_KEY")),
+        "removebg": bool(os.getenv("REMOVEBG_API_KEY")),
+    }
 
 
 @app.post("/v1/edit/ready-ai")
@@ -152,8 +166,24 @@ def edit_ready_ai(
     remove_imperfections: bool = Query(default=True),
 ) -> Response:
     pil_img = _read_upload_to_pil(image)
-    output = _commercial_pipeline(pil_img, provider=provider, preset=preset, remove_imperfections=remove_imperfections)
-    return Response(content=_pil_to_jpeg_bytes(output), media_type="image/jpeg")
+    used_provider, provider_note = _resolve_provider(provider)
+
+    # Neste MVP, a inferência usa pipeline local mesmo quando provider externo foi solicitado.
+    output = _commercial_pipeline(
+        pil_img,
+        preset=preset,
+        remove_imperfections=remove_imperfections,
+    )
+
+    return Response(
+        content=_pil_to_jpeg_bytes(output),
+        media_type="image/jpeg",
+        headers={
+            "X-Provider-Requested": provider.value,
+            "X-Provider-Used": used_provider.value,
+            "X-Provider-Note": provider_note,
+        },
+    )
 
 
 @app.post("/v1/edit/inpainting-advanced")

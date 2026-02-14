@@ -11,7 +11,7 @@ Este projeto entrega uma **IA generativa prática para edição de imagens** com
 - Máscara automática (heurística local)
 - Inpainting para remover objetos/imperfeições
 - Ajuste de cor por presets (warm, cool, cinematic, brand)
-- Pipeline com APIs externas (OpenAI/Replicate/Stability) com fallback local
+- Pipeline comercial com seleção de provider e fallback local
 - Endpoint para remoção de fundo via `remove.bg` (se chave estiver configurada)
 
 ## Stack
@@ -74,7 +74,13 @@ curl -X POST "http://localhost:8000/v1/edit/inpainting-advanced?preset=brand" \
   --output resultado_inpaint.jpg
 ```
 
-### 3) Remoção de fundo (remove.bg)
+### 3) Status dos providers
+
+`GET /v1/providers/status`
+
+Retorna quais integrações têm credenciais configuradas no ambiente.
+
+### 4) Remoção de fundo (remove.bg)
 
 `POST /v1/edit/remove-background`
 
@@ -91,7 +97,7 @@ export STABILITY_API_KEY="..."
 export REMOVEBG_API_KEY="..."
 ```
 
-> Sem chave configurada, o modo `ready-ai` cai automaticamente para pipeline local.
+> Observação: neste MVP a transformação de imagem é local. O endpoint retorna headers `X-Provider-*` para indicar provider solicitado, provider usado e motivo de fallback.
 
 ## Observações
 

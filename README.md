@@ -12,6 +12,7 @@ Este projeto entrega uma **IA generativa prática para edição de imagens** com
 - Inpainting para remover objetos/imperfeições
 - Ajuste de cor por presets (warm, cool, cinematic, brand)
 - Pipeline comercial com seleção de provider e fallback local
+- Geração em lote (`batch`) para criar múltiplas versões sem limite artificial de quantidade
 - Endpoint para remoção de fundo via `remove.bg` (se chave estiver configurada)
 
 ## Stack
@@ -56,7 +57,28 @@ curl -X POST "http://localhost:8000/v1/edit/ready-ai?provider=local&preset=cinem
   --output resultado_ready.jpg
 ```
 
-### 2) Inpainting avançado
+
+### 2) IA pronta/comercial em lote (sem limite artificial)
+
+`POST /v1/edit/ready-ai/batch`
+
+- `image`: arquivo de imagem
+- `provider`: `openai | replicate | stability | local`
+- `preset`: `none | warm | cool | cinematic | brand`
+- `remove_imperfections`: `true/false`
+- `total_outputs`: número de variações que deseja gerar (`>=1`)
+
+Retorna um arquivo `.zip` com todas as imagens criadas.
+
+Exemplo:
+
+```bash
+curl -X POST "http://localhost:8000/v1/edit/ready-ai/batch?provider=local&preset=brand&total_outputs=20" \
+  -F "image=@./exemplo.jpg" \
+  --output lote_ready_ai.zip
+```
+
+### 3) Inpainting avançado
 
 `POST /v1/edit/inpainting-advanced`
 
@@ -74,13 +96,13 @@ curl -X POST "http://localhost:8000/v1/edit/inpainting-advanced?preset=brand" \
   --output resultado_inpaint.jpg
 ```
 
-### 3) Status dos providers
+### 4) Status dos providers
 
 `GET /v1/providers/status`
 
 Retorna quais integrações têm credenciais configuradas no ambiente.
 
-### 4) Remoção de fundo (remove.bg)
+### 5) Remoção de fundo (remove.bg)
 
 `POST /v1/edit/remove-background`
 
@@ -97,7 +119,9 @@ export STABILITY_API_KEY="..."
 export REMOVEBG_API_KEY="..."
 ```
 
-> Observação: neste MVP a transformação de imagem é local. O endpoint retorna headers `X-Provider-*` para indicar provider solicitado, provider usado e motivo de fallback.
+> Observação: neste MVP a transformação de imagem é local. Nos endpoints `ready-ai`, os headers `X-Provider-*` indicam provider solicitado, provider usado e motivo de fallback.
+>
+> `total_outputs` no endpoint batch não possui teto artificial na API; o limite prático depende dos recursos da máquina (CPU/RAM/tempo).
 
 ## Observações
 

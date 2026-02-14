@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import zipfile
 from enum import Enum
 
 import cv2
@@ -98,6 +99,30 @@ def _auto_mask(np_img: np.ndarray) -> np.ndarray:
 def _inpaint(np_img: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return cv2.inpaint(np_img, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
+
+
+
+def _creative_variation(image: Image.Image, index: int) -> Image.Image:
+    arr = np.array(image).astype(np.float32)
+    # Variação leve por amostra para ampliar criação sem impor limite fixo de quantidade.
+    shift = ((index % 7) - 3) * 2.0
+    contrast = 1.0 + (((index * 13) % 11) - 5) * 0.01
+    saturation = 1.0 + (((index * 17) % 9) - 4) * 0.02
+
+    arr = np.clip((arr - 127.5) * contrast + 127.5 + shift, 0, 255).astype(np.uint8)
+    out = Image.fromarray(arr)
+    out = ImageEnhance.Color(out).enhance(max(0.1, saturation))
+    return out
+
+
+def _images_to_zip_bytes(images: list[tuple[str, Image.Image]]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, image in images:
+            img_buffer = io.BytesIO()
+            image.save(img_buffer, format="JPEG", quality=95)
+            zf.writestr(name, img_buffer.getvalue())
+    return buffer.getvalue()
 
 def _resolve_provider(provider: Provider) -> tuple[Provider, str]:
     configured = {
@@ -206,6 +231,42 @@ def edit_inpainting_advanced(
     out_img = Image.fromarray(inpainted)
     out_img = _apply_preset(out_img, preset)
     return Response(content=_pil_to_jpeg_bytes(out_img), media_type="image/jpeg")
+
+
+@app.post("/v1/edit/ready-ai/batch")
+def edit_ready_ai_batch(
+    image: UploadFile = File(...),
+    provider: Provider = Query(default=Provider.local),
+    preset: Preset = Query(default=Preset.none),
+    remove_imperfections: bool = Query(default=True),
+    total_outputs: int = Query(default=4, ge=1, description="Quantidade de imagens para criar (sem limite artificial pela API)."),
+) -> Response:
+    pil_img = _read_upload_to_pil(image)
+    used_provider, provider_note = _resolve_provider(provider)
+
+    base = _commercial_pipeline(
+        pil_img,
+        preset=preset,
+        remove_imperfections=remove_imperfections,
+    )
+
+    outputs: list[tuple[str, Image.Image]] = []
+    for index in range(total_outputs):
+        variant = _creative_variation(base, index=index)
+        outputs.append((f"output_{index + 1:04d}.jpg", variant))
+
+    zip_bytes = _images_to_zip_bytes(outputs)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="ready_ai_batch_outputs.zip"',
+            "X-Provider-Requested": provider.value,
+            "X-Provider-Used": used_provider.value,
+            "X-Provider-Note": provider_note,
+            "X-Total-Outputs": str(total_outputs),
+        },
+    )
 
 
 @app.post("/v1/edit/remove-background")
